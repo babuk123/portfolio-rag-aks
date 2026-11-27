@@ -1,0 +1,73 @@
+# ------------------------------------------------------------------
+# Portfolio RAG on AKS: one Deployment + one public Service.
+# Secrets (keys, SQL connection string, APIM shared secret) live in the
+# Kubernetes Secret "portfolio-secrets", created by infra/setup-aks.ps1,
+# never in this file or in Git.
+# The pipeline replaces IMAGE_PLACEHOLDER with ghcr.io/<owner>/<repo>:<git sha>.
+# ------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portfolio
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portfolio-rag
+  namespace: portfolio
+  labels: { app: portfolio-rag }
+spec:
+  replicas: 1                      # POC: 1 pod on 1 small node. Production: 2+ pods, HPA, PodDisruptionBudget
+  revisionHistoryLimit: 3          # keep 3 old ReplicaSets for `kubectl rollout undo`
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # new pod must be ready before the old one stops
+  selector:
+    matchLabels: { app: portfolio-rag }
+  template:
+    metadata:
+      labels: { app: portfolio-rag }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: api
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: portfolio-secrets          # every key becomes an env var, e.g. AzureOpenAI__ApiKey
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }   # what the scheduler reserves
+            limits:   { cpu: 500m, memory: 512Mi }   # hard cap; over the memory limit = pod restarted (OOMKilled)
+          readinessProbe:                             # not ready = no traffic sent to this pod
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:                              # failing = Kubernetes restarts the container
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+# Public IP via Azure Load Balancer. The UI is served from here; /api calls are only
+# accepted when they come through API Management (shared-secret header check in Program.cs).
+apiVersion: v1
+kind: Service
+metadata:
+  name: portfolio-rag
+  namespace: portfolio
+spec:
+  type: LoadBalancer
+  selector: { app: portfolio-rag }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

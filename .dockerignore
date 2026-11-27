@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/.angular
+**/bin
+**/obj
+**/.vs
+**/.vscode
+.git
+.github
+infra
+k8s
+*.md
+**/*.user
+.env

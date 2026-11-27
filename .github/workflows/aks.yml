@@ -1,0 +1,95 @@
+# CI/CD for the AKS version
+#  - Pull request to main: build the Docker image (no push) = CI
+#  - Push to main:         build + push image to GitHub Container Registry (ghcr.io),
+#                          then roll it out to AKS and smoke-test /health through API Management
+#
+# One-time setup: run infra/setup-aks.ps1 (creates AKS + APIM and saves the KUBE_CONFIG secret),
+# then add repository variable APIM_HEALTH_URL (printed by the script, ends with /portfolio/health).
+name: aks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write          # push images to ghcr.io with the built-in GITHUB_TOKEN (no extra secret)
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image name (registry paths must be lowercase)
+        id: meta
+        run: |
+          img=$(echo "${{ env.IMAGE }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=$img" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha          # reuse layers between runs (npm ci / dotnet restore)
+          cache-to: type=gha,mode=max
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connect to AKS
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+
+      - name: Apply manifests with this commit's image
+        run: |
+          sed "s#IMAGE_PLACEHOLDER#${{ needs.build.outputs.image }}:${{ github.sha }}#" k8s/deployment.yaml | kubectl apply -f -
+
+      - name: Wait for rollout (rolls back automatically on failure)
+        run: |
+          if ! kubectl rollout status deployment/portfolio-rag -n portfolio --timeout=300s; then
+            echo "Rollout failed - undoing"
+            kubectl rollout undo deployment/portfolio-rag -n portfolio
+            exit 1
+          fi
+
+      - name: Smoke test through API Management
+        if: vars.APIM_HEALTH_URL != ''
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "${{ vars.APIM_HEALTH_URL }}" || true)
+            echo "Attempt $i: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "Health check through APIM failed"; exit 1
