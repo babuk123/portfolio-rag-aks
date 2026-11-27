@@ -36,6 +36,7 @@ $search  = "srch-portfolio-$Prefix"
 $openai  = "oai-portfolio-$Prefix"
 $webapp  = "app-portfolio-$Prefix"
 $ns      = "portfolio"
+$uiHost  = "portfolio-$Prefix.$Location.cloudapp.azure.com"   # free Azure DNS label on the LoadBalancer IP (see k8s/deployment.yaml)
 $image   = "ghcr.io/$($GitHubRepo.ToLower()):latest"
 $subId   = az account show --query id -o tsv; Assert-Az 'az account show'
 
@@ -154,7 +155,7 @@ $policyXml = @"
   <inbound>
     <base />
     <cors allow-credentials="false">
-      <allowed-origins><origin>http://$ip</origin><origin>http://localhost:4200</origin></allowed-origins>
+      <allowed-origins><origin>http://$uiHost</origin><origin>http://$ip</origin><origin>http://localhost:4200</origin></allowed-origins>
       <allowed-methods><method>GET</method><method>POST</method><method>OPTIONS</method></allowed-methods>
       <allowed-headers><header>*</header></allowed-headers>
     </cors>
@@ -195,7 +196,7 @@ if (Get-Command gh -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "`nDone." -ForegroundColor Green
-Write-Host "  UI (served by AKS):      http://$ip"
+Write-Host "  UI (served by AKS):      http://$uiHost   (or http://$ip)"
 Write-Host "  API through APIM:        $gatewayUrl/portfolio/api/customers"
 Write-Host "  Direct API call (403):   http://$ip/api/customers   <- blocked: must go through APIM"
 Write-Host "`nSave money when idle:"

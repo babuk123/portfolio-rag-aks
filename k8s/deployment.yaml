@@ -64,6 +64,9 @@ kind: Service
 metadata:
   name: portfolio-rag
   namespace: portfolio
+  annotations:
+    # Free Azure DNS name for the public IP: http://portfolio-bab01.westus3.cloudapp.azure.com
+    service.beta.kubernetes.io/azure-dns-label-name: portfolio-bab01
 spec:
   type: LoadBalancer
   selector: { app: portfolio-rag }
