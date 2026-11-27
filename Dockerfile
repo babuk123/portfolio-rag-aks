@@ -25,9 +25,10 @@ RUN dotnet publish PortfolioRag.Api/PortfolioRag.Api.csproj -c Release -o /app -
 
 # ---------- Stage 3: runtime ----------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
-# fontconfig: needed by QuestPDF (Skia) for fonts on Linux; tzdata: America/New_York dates in the PDF
+# fontconfig + fonts: QuestPDF (Skia) draws SVG chart text with system fonts (Liberation = Arial-compatible sans);
+# tzdata: America/New_York dates in the PDF
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libfontconfig1 tzdata \
+ && apt-get install -y --no-install-recommends libfontconfig1 tzdata fonts-dejavu-core fonts-liberation \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app ./
